@@ -1,3 +1,4 @@
+// all necessary imports
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -8,10 +9,12 @@ const bp = require('body-parser');
 const dns = require('dns');
 const dnsOptions = {all: true};
 
+// connect to db
 mongoose.connect(process.env['MONGO_URI'], { useNewUrlParser: true, useUnifiedTopology: true }).then(()=>{
   console.log('database connected.')
 }).catch((err) => console.log(err.message));
 
+// define schema to store url mappings
 const Schema = mongoose.Schema;
 
 const urlSchema = new Schema ({
@@ -19,8 +22,10 @@ const urlSchema = new Schema ({
   shortUrl: {type: Number}
 });
 
+// automatically assign short urls numerically
 urlSchema.plugin(AutoIncrement, {id: "urlId", inc_field: 'shortUrl'});
 
+// assign schema and create model
 const Url = mongoose.model("Url", urlSchema);
 
 // Basic Configuration
@@ -30,6 +35,7 @@ app.use(cors());
 
 app.use('/public', express.static(`${process.cwd()}/public`));
 
+// serve static html page
 app.get('/', function(req, res) {
   res.sendFile(process.cwd() + '/views/index.html');
 });
@@ -39,58 +45,63 @@ app.get('/api/hello', function(req, res) {
   res.json({ greeting: 'hello API' });
 });
 
-app.use("/api/shorturl", bp.urlencoded({extended: false}));
-app.use(bp.json());
+// extract data encoded in url
+app.use(express.urlencoded({
+  limit: '10mb',
+  extended: true
+}));
 
-app.post('/api/shorturl', async (req, res) => {
-try {
-  const urlOriginal = req.body.url;
-  let urlPattern = /^https?:\/\/+/;
-  let hostName = urlOriginal.split("/")[2];
-  if (urlPattern.test(urlOriginal) == false) {
-      res.json({error: "Invalid Url"});
-  } else {
-    //check whether address exist in db;
-      const existingUrl = await Url.findOne({originalUrl: urlOriginal});
-      //if exists
-      if (existingUrl) {
-      //responds with information
-     res.json({"original_url": urlOriginal, "short_url": existingUrl.shortUrl, "New url": `https://project-urlshortener.jlio-se.repl.co/api/shorturl/${existingUrl.shortUrl}`});
-      } else {
-        dns.lookup(hostName, dnsOptions, (err, address) => {
-          if (err) { 
-           console.log(err);
-            res.json({error: "Invalid Hostname"});
-          } else {
-            let url = new Url (
-              {originalUrl: urlOriginal}
-            );
+// Used this arrays to store the passed URLs
+const originalURLs = [];
+const shortURLs = [];
 
-            url.save((err, saved) => {
-              if (err) {return console.log(err);} else {
-              res.json({"original_url": urlOriginal, "short_url": saved.shortUrl, "New url": `https://project-urlshortener.jlio-se.repl.co/api/shorturl/${saved.shortUrl}`});
-                };
-            });
-          }
-        });
-      };
-    } 
-}  catch (err) {
-  console.log(err);
-  }  
+// URL Shortener API endpoint
+app.post('/api/shorturl', (req, res) => {
+  const url = req.body.url;
+
+  // REGEX for checking if the passed URL is of correct format or not
+  var pattern = new RegExp('^(https?:\\/\\/)?' + // protocol
+    '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|' + // domain name
+    '((\\d{1,3}\\.){3}\\d{1,3}))' + // OR ip (v4) address
+    '(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*' + // port and path
+    '(\\?[;&a-z\\d%_.~+=-]*)?' + // query string
+    '(\\#[-a-z\\d_]*)?$', 'i'); // fragment locator
+  if (!pattern.test(url)) return res.json({ error: 'invalid url' });
+
+  // Finding the index of the passed URL in originalURLs array
+  const foundIndex = originalURLs.indexOf(url);
+
+  // If passed URL is not found in the originalURLs array
+  if (foundIndex < 0) {
+    originalURLs.push(url);
+    shortURLs.push(shortURLs.length);
+
+    return res.json({
+      original_url: url,
+      short_url: shortURLs.length - 1 // After pushing the shorlURLs in Line 49 the length is incremented, so we get short_url value as shortURLs's length - 1
+    });
+  }
+
+  // If passed URL is in the originalURLs array
+  return res.json({
+    original_url: url,
+    short_url: shortURLs[foundIndex] // Get the passed url index and assign the short_url to shortURLs array at index of passed url
+  });
 });
 
-app.get("/api/shorturl/:urlNum", (req, res) => {
-  const urlNum = req.params.urlNum;
-  Url.findOne({shortUrl: urlNum}, (err, urlFound) => {
-    if (err) {
-      console.log(err);
-    } if (!urlFound) {
-      res.json({error: "url not found"});
-    } else {
-      res.redirect(urlFound.originalUrl);
-    };
-  });
+// Shortened URL's original URL access API endpoint
+app.get("/api/shorturl/:value", (req, res) => {
+  const shortenedURL = Number(req.params.value);
+  if (Number.isNaN(shortenedURL)) return res.json({ "error": "Wrong format" }); // If the passed shortenedURL is Not-a-Number return "Wrong format" error message
+
+  // Finding the index of the passed shortenedURL in shortURLs array
+  const foundIndex = shortURLs.indexOf(shortenedURL);
+
+  // If passed URL is not found in the originalURLs array
+  if (foundIndex < 0) return res.json({ "error": "No short URL found for the given input" });
+
+  // If passed URL is in the originalURLs array
+  res.redirect(originalURLs[foundIndex]);
 });
 
 app.listen(port, function() {
